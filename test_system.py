@@ -124,12 +124,74 @@ def run_tests():
     assert len(fsm.reported_cycles) == 1, "Çevrim raporu kaydedilmedi!"
     
     report = fsm.reported_cycles[0]
-    print(f"\nKaydedilen Çevrim Verisi: {report}")
+    print(f"\nKaydedilen Çevrim Verisi (Geriye Dönük Uyumluluk): {report}")
     assert report["Döngü No"] == 1
     assert "Uzanma (TMU)" in report
     assert "Toplam (TMU)" in report
+    print("[BAŞARILI] Geriye dönük uyumluluk testi geçti.\n")
+
+def run_home_area_tests():
+    print("=== 'HOME AREA' KONTROL TESTLERİ BAŞLATILDI ===")
+    config_data = {
+        "rois": {
+            "Box 1": [[0, 0], [10, 0], [10, 10], [0, 10]],
+            "Assembly Area": [[10, 20], [20, 20], [20, 30], [10, 30]],
+            "Home Area": [[0, 30], [10, 30], [10, 40], [0, 40]]
+        },
+        "assembly_recipe": ["Box 1", "Assembly Area"]
+    }
+    fsm = MOSTStateMachine(config_data)
+    current_time = time.time()
+
+    # H1: IDLE başlangıcı (El Home Area içinde, örn: 5, 35)
+    lm = mock_landmark([5, 38], [5, 35], [5, 35.6])
+    for _ in range(5):
+        fsm.process_frame(lm, "Right", current_time)
+    print(f"H1 - Home IDLE: Beklenen: IDLE, Gerçek: {fsm.state}")
+    assert fsm.state == "IDLE"
+
+    # H2: REACH (El Home Area dışına çıkıyor, örn: 5, 20)
+    current_time += 1.0
+    lm = mock_landmark([5, 23], [5, 20], [5, 20.6])
+    for _ in range(5):
+        fsm.process_frame(lm, "Right", current_time)
+    print(f"H2 - Home REACH: Beklenen: REACH, Gerçek: {fsm.state}")
+    assert fsm.state == "REACH"
+
+    # H3: GRASP (Box 1'e girdi ve kavradı)
+    current_time += 1.0
+    lm = mock_landmark([5, 8], [5, 5], [5, 5.15])
+    for _ in range(10):
+        current_time += 0.1
+        fsm.process_frame(lm, "Right", current_time)
+    print(f"H3 - Home GRASP -> MOVE: Beklenen: MOVE, Gerçek: {fsm.state}")
+    assert fsm.state == "MOVE"
+
+    # H4: PLACE (Montaj alanında bıraktı)
+    current_time += 1.0
+    lm = mock_landmark([15, 28], [15, 25], [15, 25.6])
+    for _ in range(10):
+        current_time += 0.1
+        fsm.process_frame(lm, "Right", current_time)
+    # Son adım tamamlandığı için RETURNING_HOME fazına geçmeli
+    print(f"H4 - Home PLACE -> RETURNING_HOME: Beklenen: RETURNING_HOME, Gerçek: {fsm.state}")
+    assert fsm.state == "RETURNING_HOME"
+
+    # H5: RETURNING_HOME -> IDLE (El Home Area içine döndü, örn: 5, 35)
+    current_time += 1.0
+    lm = mock_landmark([5, 38], [5, 35], [5, 35.6])
+    for _ in range(5):
+        fsm.process_frame(lm, "Right", current_time)
+    print(f"H5 - Home Dönüşü Tamamlama: Beklenen: IDLE, Gerçek: {fsm.state}")
+    assert fsm.state == "IDLE"
+    assert len(fsm.reported_cycles) == 1, "Rapor kaydedilmedi!"
     
-    print("\n[BAŞARILI] TÜM KALİTE KONTROL TESTLERİ GEÇTİ!")
+    report = fsm.reported_cycles[0]
+    print(f"Kaydedilen Çevrim Verisi (Home Area): {report}")
+    assert report["Dönüş (TMU)"] > 0, "Dönüş süresi hesaplanamadı!"
+    print("[BAŞARILI] 'Home Area' entegrasyon testi geçti.\n")
 
 if __name__ == "__main__":
     run_tests()
+    run_home_area_tests()
+    print("=== TÜM KALİTE KONTROL TESTLERİ BAŞARIYLA GEÇTİ! ===")

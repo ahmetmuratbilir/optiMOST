@@ -50,7 +50,7 @@ class MOSTStateMachine:
         }
         
         # FSM Durumları
-        self.state = "IDLE" # IDLE, REACH, GRASP, MOVE, PLACE
+        self.state = "IDLE" # IDLE, REACH, GRASP, MOVE, PLACE, RETURNING_HOME
         self.state_start_time = time.time()
         
         # Çevrim Kontrolü
@@ -63,7 +63,8 @@ class MOSTStateMachine:
             "Reach": 0.0,
             "Grasp": 0.0,
             "Move": 0.0,
-            "Place": 0.0
+            "Place": 0.0,
+            "Return": 0.0
         }
         
         # Bitmiş Çevrim Raporları
@@ -85,7 +86,7 @@ class MOSTStateMachine:
         self.place_confirm_counter = 0
         self.sequence_error = False
         self.active_warning = ""
-        self.current_cycle_steps = {"Reach": 0.0, "Grasp": 0.0, "Move": 0.0, "Place": 0.0}
+        self.current_cycle_steps = {"Reach": 0.0, "Grasp": 0.0, "Move": 0.0, "Place": 0.0, "Return": 0.0}
         if next_cycle:
             self.isg_violation_in_cycle = False
 
@@ -132,11 +133,12 @@ class MOSTStateMachine:
         target_roi = self.rois.get(target_roi_name, [])
         assembly_roi_name = self.recipe[-1] # Genellikle reçetenin son adımı montaj alanıdır
         assembly_roi = self.rois.get(assembly_roi_name, [])
+        home_roi = self.rois.get("Home Area", [])
         
         # Diğer kutulardan birine girdi mi? (Sıra kontrolü)
         in_wrong_box = False
         for roi_name, roi_poly in self.rois.items():
-            if roi_name != target_roi_name and roi_name != assembly_roi_name:
+            if roi_name != target_roi_name and roi_name != assembly_roi_name and roi_name != "Home Area":
                 if point_in_polygon(hand_pos, roi_poly):
                     in_wrong_box = True
                     self.sequence_error = True
@@ -146,13 +148,22 @@ class MOSTStateMachine:
         duration = current_time - self.state_start_time
         
         if self.state == "IDLE":
-            self.active_warning = "Başlamak için Kutuya uzanın."
-            # El montaj alanından çıkıp hedef kutuya doğru hareket ettiğinde REACH başlar
-            if not point_in_polygon(hand_pos, assembly_roi):
-                self.state = "REACH"
-                self.state_start_time = current_time
-                self.sequence_error = False
-                self.active_warning = f"{target_roi_name} kutusuna uzanılıyor."
+            if home_roi:
+                self.active_warning = "Başlamak için elleri dinlenme alanından (Home Area) kaldırın."
+                # El Home Area dışına çıktığında REACH başlar
+                if not point_in_polygon(hand_pos, home_roi):
+                    self.state = "REACH"
+                    self.state_start_time = current_time
+                    self.sequence_error = False
+                    self.active_warning = f"{target_roi_name} kutusuna uzanılıyor."
+            else:
+                self.active_warning = "Başlamak için Kutuya uzanın."
+                # El montaj alanından çıkıp hedef kutuya doğru hareket ettiğinde REACH başlar
+                if not point_in_polygon(hand_pos, assembly_roi):
+                    self.state = "REACH"
+                    self.state_start_time = current_time
+                    self.sequence_error = False
+                    self.active_warning = f"{target_roi_name} kutusuna uzanılıyor."
                 
         elif self.state == "REACH":
             # Hedef kutuya ulaşıldığında GRASP başlar
@@ -208,15 +219,28 @@ class MOSTStateMachine:
                 
                 # Reçete tamamlandı mı?
                 if self.current_recipe_idx >= len(self.recipe) - 1:
-                    # Bir tam çevrim (cycle) bitti!
-                    self.save_completed_cycle()
-                    self.reset_cycle(next_cycle=True)
+                    if home_roi:
+                        # Home Area tanımlı ise RETURNING_HOME fazına geç
+                        self.state = "RETURNING_HOME"
+                        self.state_start_time = current_time
+                        self.active_warning = "Montaj tamamlandı. Elleri dinlenme alanına (Home Area) götürün."
+                    else:
+                        # Home Area yoksa direkt çevrimi kaydet ve bitir
+                        self.save_completed_cycle()
+                        self.reset_cycle(next_cycle=True)
                 else:
                     # Sıradaki kutuya geç
                     self.state = "REACH"
                     self.state_start_time = current_time
                     self.grasp_confirm_counter = 0
                     self.place_confirm_counter = 0
+
+        elif self.state == "RETURNING_HOME":
+            # El Home Area bölgesine girdiğinde çevrim resmi olarak biter
+            if point_in_polygon(hand_pos, home_roi):
+                self.current_cycle_steps["Return"] += duration
+                self.save_completed_cycle()
+                self.reset_cycle(next_cycle=True)
 
     def save_completed_cycle(self):
         """Tamamlanan montaj çevrimini TMU birimine dönüştürerek rapor listesine kaydeder."""
@@ -225,10 +249,11 @@ class MOSTStateMachine:
         
         cycle_data = {
             "Döngü No": self.cycle_number,
-            "Uzanma (TMU)": tmu_steps["Reach"],
-            "Kavrama (TMU)": tmu_steps["Grasp"],
-            "Taşıma (TMU)": tmu_steps["Move"],
-            "Yerleştirme (TMU)": tmu_steps["Place"],
+            "Uzanma (TMU)": tmu_steps.get("Reach", 0.0),
+            "Kavrama (TMU)": tmu_steps.get("Grasp", 0.0),
+            "Taşıma (TMU)": tmu_steps.get("Move", 0.0),
+            "Yerleştirme (TMU)": tmu_steps.get("Place", 0.0),
+            "Dönüş (TMU)": tmu_steps.get("Return", 0.0),
             "Toplam (TMU)": total_tmu,
             "İSG İhlali": "Var" if self.isg_violation_in_cycle else "Yok"
         }
