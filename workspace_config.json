@@ -1,34 +1,60 @@
 {
-  "rois": {
-    "box1": [
-      [20, 20],
-      [180, 20],
-      [180, 150],
-      [20, 150]
-    ],
-    "box2": [
-      [460, 20],
-      [620, 20],
-      [620, 150],
-      [460, 150]
-    ],
-    "Assembly Area": [
-      [220, 120],
-      [420, 120],
-      [420, 260],
-      [220, 260]
-    ],
-    "Home Area": [
-      [220, 330],
-      [420, 330],
-      [420, 460],
-      [220, 460]
-    ]
-  },
-  "assembly_recipe": [
+  "stations": [
+    {
+      "name": "box1",
+      "polygon": [
+        [20, 20],
+        [180, 20],
+        [180, 150],
+        [20, 150]
+      ]
+    },
+    {
+      "name": "box2",
+      "polygon": [
+        [460, 20],
+        [620, 20],
+        [620, 150],
+        [460, 150]
+      ]
+    },
+    {
+      "name": "Assembly Area",
+      "polygon": [
+        [220, 120],
+        [420, 120],
+        [420, 260],
+        [220, 260]
+      ]
+    },
+    {
+      "name": "Home Area",
+      "polygon": [
+        [220, 330],
+        [420, 330],
+        [420, 460],
+        [220, 460]
+      ]
+    }
+  ],
+  "recipe": [
     "box1",
     "box2",
     "Assembly Area"
   ],
+  "grasp": {
+    "pinch_threshold": 0.28,
+    "release_threshold": 0.40,
+    "velocity_threshold": 8.0,
+    "grasp_confirm_frames": 4,
+    "release_confirm_frames": 3
+  },
+  "ppe": {
+    "helmet": true,
+    "vest": true,
+    "glove": true
+  },
+  "yolo_model_path": "yolov8n.pt",
+  "yolo_skip_frames": 15,
   "video_path": 0
 }

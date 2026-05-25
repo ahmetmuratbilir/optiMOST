@@ -1,189 +1,24 @@
+# pip install opencv-python mediapipe ultralytics openpyxl
 import cv2
 import json
 import os
 import sys
 import time
+import argparse
 import threading
 import queue
 import numpy as np
-import pandas as pd
-from fsm import MOSTStateMachine
+from fsm import MOSTTracker, point_in_polygon
 
-CONFIG_FILE = "workspace_config.json"
-EXPORT_EXCEL = "MOST_Entegre_Analiz_Raporu.xlsx"
-EXPORT_CSV = "MOST_Entegre_Analiz_Raporu.csv"
-
-# YOLO Entegrasyonu için Hazırlık
 yolo_available = False
 try:
     from ultralytics import YOLO
     yolo_available = True
 except ImportError:
-    print("[UYARI] 'ultralytics' paketi kurulu değil. YOLO İSG denetimi simülasyon modunda çalışacak.")
-
-class VideoStream:
-    """Kamera veya videodan kareleri gecikmesiz okumak için Thread yapısı."""
-    def __init__(self, src):
-        self.cap = cv2.VideoCapture(src)
-        self.q = queue.Queue(maxsize=3)
-        self.stopped = False
-        self.thread = threading.Thread(target=self._update, daemon=True)
-
-    def start(self):
-        self.thread.start()
-        return self
-
-    def _update(self):
-        while not self.stopped:
-            if not self.cap.isOpened():
-                self.stopped = True
-                break
-            ret, frame = self.cap.read()
-            if not ret:
-                self.stopped = True
-                break
-            # Kuyruk doluysa eski kareyi çıkar, yenisini ekle (gecikmeyi önler)
-            if self.q.full():
-                try:
-                    self.q.get_nowait()
-                except queue.Empty:
-                    pass
-            self.q.put(frame)
-        self.cap.release()
-
-    def read(self):
-        if self.stopped or self.q.empty():
-            return None
-        return self.q.get()
-
-    def stop(self):
-        self.stopped = True
-
-def draw_roi_polygons(frame, rois, active_target_name):
-    """Tanımlı tüm poligonları ve isimlerini ekrana çizer."""
-    for name, pts in rois.items():
-        pts_arr = np.array(pts, dtype=np.int32)
-        # Aktif hedef bölgeyi mavi, diğerlerini sarı çiz
-        color = (255, 0, 0) if name == active_target_name else (0, 255, 255)
-        cv2.polylines(frame, [pts_arr], True, color, 2)
-        
-        # Etiket için merkez noktayı bul
-        m = cv2.moments(pts_arr)
-        if m["m00"] != 0:
-            cx = int(m["m10"] / m["m00"])
-            cy = int(m["m01"] / m["m00"])
-        else:
-            cx, cy = pts[0][0], pts[0][1]
-            
-        cv2.putText(frame, name, (cx - 20, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
-
-def draw_hud(frame, fsm, isg_status, fps, elbow_angle=None):
-    """MOST, İSG ve Ergonomi verilerini ekranın solunda şeffaf dikey bir panelde birleştirir."""
-    h, w = frame.shape[:2]
-    
-    # 1. Sol Üst Konum ve Boyutlar (Genişlik: 190, Yükseklik: 245)
-    x1, y1 = 10, 10
-    x2, y2 = 200, 255
-    
-    # Şeffaf Arka Plan Paneli
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (x1, y1), (x2, y2), (10, 10, 10), -1)
-    alpha = 0.30  # %30 şeffaflık
-    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
-    
-    # Panel İnce Çerçevesi
-    cv2.rectangle(frame, (x1, y1), (x2, y2), (180, 180, 180), 1)
-    
-    # FSM Durumuna Göre Dinamik Sol Kenar Akış Şeridi (Accent Bar)
-    state_colors = {
-        "IDLE": (120, 120, 120),       # Gri
-        "REACH": (255, 255, 0),       # Camgöbeği (Cyan)
-        "GRASP": (0, 165, 255),       # Turuncu
-        "MOVE": (255, 0, 0),          # Mavi
-        "PLACE": (0, 255, 0),         # Yeşil
-        "RETURNING_HOME": (0, 255, 255) # Sarı
-    }
-    accent_color = state_colors.get(fsm.state, (255, 255, 255))
-    cv2.rectangle(frame, (x1, y1), (x1 + 3, y2), accent_color, -1)
-    
-    # --- 1. MOST İŞ ETÜDÜ BÖLÜMÜ ---
-    cv2.putText(frame, "MOST IS ETUDU", (18, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Dongu:{fsm.cycle_number} | {fsm.state}", (18, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-    
-    recipe_step = fsm.recipe[fsm.current_recipe_idx] if fsm.current_recipe_idx < len(fsm.recipe) else "Bitti"
-    cv2.putText(frame, f"Hedef: {recipe_step}", (18, 53), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 150, 0), 1, cv2.LINE_AA)
-    
-    tmu = fsm.current_cycle_steps
-    tmu_reach = round(tmu.get("Reach", 0.0) * 27.8, 1)
-    tmu_grasp = round(tmu.get("Grasp", 0.0) * 27.8, 1)
-    tmu_move = round(tmu.get("Move", 0.0) * 27.8, 1)
-    tmu_place = round(tmu.get("Place", 0.0) * 27.8, 1)
-    tmu_return = round(tmu.get("Return", 0.0) * 27.8, 1)
-    total_tmu = round(tmu_reach + tmu_grasp + tmu_move + tmu_place + tmu_return, 1)
-    
-    cv2.putText(frame, f"U:{tmu_reach} K:{tmu_grasp} T:{tmu_move}", (18, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Y:{tmu_place} D:{tmu_return} TMU", (18, 81), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Toplam: {total_tmu} TMU", (18, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
-    
-    # Bölücü Çizgi 1
-    cv2.line(frame, (15, 104), (195, 104), (80, 80, 80), 1)
-    
-    # --- 2. İSG KONTROLÜ BÖLÜMÜ ---
-    cv2.putText(frame, "ISG KKD DURUMU", (18, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1, cv2.LINE_AA)
-    
-    k_color = (0, 255, 0) if isg_status.get("Kask", True) else (0, 0, 255)
-    v_color = (0, 255, 0) if isg_status.get("Yelek", True) else (0, 0, 255)
-    e_color = (0, 255, 0) if isg_status.get("Eldiven", True) else (0, 0, 255)
-    
-    cv2.putText(frame, "Kask", (18, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, k_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, "Yelek", (70, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, v_color, 1, cv2.LINE_AA)
-    cv2.putText(frame, "Eldiven", (125, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, e_color, 1, cv2.LINE_AA)
-    
-    # Bölücü Çizgi 2
-    cv2.line(frame, (15, 142), (195, 142), (80, 80, 80), 1)
-    
-    # --- 3. ERGONOMİ BÖLÜMÜ ---
-    cv2.putText(frame, "ERGONOMI", (18, 156), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 150, 0), 1, cv2.LINE_AA)
-    
-    if elbow_angle is not None:
-        if elbow_angle > 150:
-            angle_color = (0, 0, 255) # Kırmızı
-            strain_txt = "YUKSEK"
-        elif elbow_angle > 120:
-            angle_color = (0, 255, 255) # Sarı
-            strain_txt = "ORTA"
-        else:
-            angle_color = (0, 255, 0) # Yeşil
-            strain_txt = "DUSUK"
-        cv2.putText(frame, f"Aci: {int(elbow_angle)} deg", (18, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.35, angle_color, 1, cv2.LINE_AA)
-        cv2.putText(frame, f"Gerginlik: {strain_txt}", (18, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.35, angle_color, 1, cv2.LINE_AA)
-    else:
-        cv2.putText(frame, "Aci: Tespit yok", (18, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1, cv2.LINE_AA)
-        cv2.putText(frame, "Gerginlik: --", (18, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1, cv2.LINE_AA)
-        
-    # Bölücü Çizgi 3
-    cv2.line(frame, (15, 194), (195, 194), (80, 80, 80), 1)
-    
-    # --- 4. KAVRAMA / PINCH KONTROL DETAYI ---
-    cv2.putText(frame, "KAVRAMA KONTROL", (18, 207), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 255), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Oran: {fsm.last_pinch_dist:.2f} / {fsm.pinch_threshold:.2f}", (18, 221), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-    
-    # Bölücü Çizgi 4
-    cv2.line(frame, (15, 230), (195, 230), (80, 80, 80), 1)
-    
-    # --- 5. TAZELENME HIZI (FPS) ---
-    cv2.putText(frame, f"Sistem: {round(fps, 1)} FPS", (18, 244), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
-
-    # 3. Alt Ortadaki Uyarı Paneli (Aynı kalacak)
-    if fsm.active_warning or fsm.sequence_error:
-        warn_text = fsm.active_warning
-        color = (0, 0, 255) if (fsm.sequence_error or "Hata" in warn_text) else (0, 255, 255)
-        cv2.rectangle(frame, (10, h - 50), (w - 10, h - 10), (0, 0, 0), -1)
-        cv2.rectangle(frame, (10, h - 50), (w - 10, h - 10), color, 1)
-        cv2.putText(frame, warn_text, (30, h - 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
+    print("[UYARI] 'ultralytics' paketi yuklu degil. YOLO ISG denetimi simule edilecek.")
 
 def calculate_angle(a, b, c):
-    """Üç nokta arasındaki açıyı derece olarak hesaplar."""
+    """Uc nokta arasindaki aciyi derece olarak hesaplar."""
     a = np.array(a)
     b = np.array(b)
     c = np.array(c)
@@ -193,31 +28,152 @@ def calculate_angle(a, b, c):
         angle = 360.0 - angle
     return angle
 
-def main():
-    if not os.path.exists(CONFIG_FILE):
-        print(f"[HATA] Yapılandırma dosyası bulunamadı: {CONFIG_FILE}")
-        print("Lütfen önce 'roi_selector.py' ile alanları tanımlayın.")
-        sys.exit(1)
-        
-    with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-        config_data = json.load(f)
-        
-    rois = config_data.get("rois", {})
-    recipe = config_data.get("assembly_recipe", [])
-    video_path = config_data.get("video_path", 0)
+def draw_hud(frame, metrics, isg_status, fps, recipe_step, tracker):
+    h, w = frame.shape[:2]
     
-    if not rois or not recipe:
-        print("[HATA] Yapılandırma dosyasındaki ROIs veya reçete eksik.")
-        sys.exit(1)
-        
-    # FSM ve MediaPipe Başlatma
-    fsm = MOSTStateMachine(config_data)
+    # 1. Sol Ust Konum ve Boyutlar (Genislik: 190, Yukseklik: 235)
+    x1, y1 = 10, 10
+    x2, y2 = 200, 245
     
+    # Seffaf Arka Plan Paneli
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (10, 10, 10), -1)
+    alpha = 0.30
+    cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+    
+    # Panel Ince Cercevesi
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (180, 180, 180), 1)
+    
+    # FSM Durumuna Gore Dinamik Accent Bar
+    state = metrics["state"]
+    state_colors = {
+        "IDLE": (120, 120, 120),       # Gri
+        "REACH": (255, 255, 0),       # Camgobegi (Cyan)
+        "GRASP": (0, 165, 255),       # Turuncu
+        "MOVE": (255, 0, 0),          # Mavi
+        "PLACE": (0, 255, 0),         # Yesil
+        "RETURNING_HOME": (0, 255, 255) # Sari
+    }
+    accent_color = state_colors.get(state, (255, 255, 255))
+    cv2.rectangle(frame, (x1, y1), (x1 + 3, y2), accent_color, -1)
+    
+    # --- YAZILAR ---
+    # 1. FSM Durumu + FPS
+    cv2.putText(frame, f"{state} | {round(fps, 1)} FPS", (18, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (0, 255, 255), 1, cv2.LINE_AA)
+    
+    # 2. Pinch Orani ve Progress Bar
+    pinch_ratio = metrics["pinch_ratio"]
+    cv2.putText(frame, f"Pinch: {pinch_ratio:.2f}", (18, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # Progress Bar Border
+    cv2.rectangle(frame, (18, 49), (185, 55), (150, 150, 150), 1)
+    # Fill (oran 0.0 - 1.0 arasinda sinirlandirilir)
+    fill_width = int(min(max(pinch_ratio, 0.0), 1.0) * 165)
+    # Pinch esigi altindaysa yesil, yoksa turuncu ciz
+    fill_color = (0, 255, 0) if pinch_ratio < tracker.pinch_threshold else (0, 165, 255)
+    cv2.rectangle(frame, (19, 50), (19 + fill_width, 54), fill_color, -1)
+    
+    # 3. Anlik Hiz (Velocity)
+    cv2.putText(frame, f"Hiz: {metrics['velocity']:.1f} px/fr", (18, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # 4. Debounce Sayaci
+    cv2.putText(frame, f"Debounce: {metrics['debounce_count']}", (18, 87), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # 5. Sure + TMU
+    cv2.putText(frame, f"Sure: {metrics['cycle_time_sec']:.1f}s ({metrics['tmu']:.1f} TMU)", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # Bolucu cizgi
+    cv2.line(frame, (15, 114), (195, 114), (80, 80, 80), 1)
+    
+    # 6. KKD Badgeleri
+    cv2.putText(frame, "ISG KKD DURUMU", (18, 128), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (0, 0, 255), 1, cv2.LINE_AA)
+    
+    k_color = (0, 255, 0) if isg_status.get("helmet", True) else (0, 0, 255)
+    v_color = (0, 255, 0) if isg_status.get("vest", True) else (0, 0, 255)
+    e_color = (0, 255, 0) if isg_status.get("glove", True) else (0, 0, 255)
+    
+    cv2.putText(frame, "Kask", (18, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, k_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, "Yelek", (70, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, v_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, "Eldiven", (125, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, e_color, 1, cv2.LINE_AA)
+
+def draw_station_polygons(frame, stations, active_target_name):
+    """Sistemdeki tum bolgeleri farkli renklerde cizer."""
+    colors = [
+        (0, 255, 0),    # Yesil
+        (255, 0, 0),    # Mavi
+        (0, 0, 255),    # Kirmizi
+        (0, 255, 255),  # Sari
+        (255, 0, 255),  # Magenta
+        (255, 255, 0)   # Camgobegi
+    ]
+    for idx, (name, pts) in enumerate(stations.items()):
+        pts_arr = np.array(pts, dtype=np.int32)
+        # Aktif olan hedef bolgeyi parlak ciz, digerlerini standart ciz
+        color = (255, 0, 255) if name == active_target_name else colors[idx % len(colors)]
+        cv2.polylines(frame, [pts_arr], True, color, 2)
+        
+        m = cv2.moments(pts_arr)
+        if m["m00"] != 0:
+            cx = int(m["m10"] / m["m00"])
+            cy = int(m["m01"] / m["m00"])
+        else:
+            cx, cy = pts[0][0], pts[0][1]
+            
+        cv2.putText(frame, name, (cx - 20, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1, cv2.LINE_AA)
+
+def export_to_excel(reported_cycles, filename="rapor.xlsx"):
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "MOST Analiz Raporu"
+    
+    headers = ["cycle_no", "station", "state_sequence", "duration_sec", "tmu", "sequence_ok"]
+    ws.append(headers)
+    
+    for c in reported_cycles:
+        ws.append([
+            c["cycle_no"],
+            c["station"],
+            c["state_sequence"],
+            c["duration_sec"],
+            c["tmu"],
+            c["sequence_ok"]
+        ])
+        
+    wb.save(filename)
+    print(f"[RAPOR] Excel kaydedildi: {filename}")
+
+# --- THREAD FONKSIYONLARI ---
+
+def video_reader(source, frame_queue, stop_event):
+    cap = cv2.VideoCapture(source)
+    if not cap.isOpened():
+        print(f"[HATA] Video kaynagi acilamadi: {source}")
+        stop_event.set()
+        return
+        
+    while not stop_event.is_set():
+        ret, frame = cap.read()
+        if not ret:
+            print("[INFO] Video/Kamera akisi sona erdi.")
+            break
+            
+        if frame_queue.full():
+            try:
+                frame_queue.get_nowait()
+            except queue.Empty:
+                pass
+        frame_queue.put(frame)
+        time.sleep(0.01) # CPU'yu rahatlatmak icin
+        
+    cap.release()
+
+def ai_inference(frame_queue, results_queue, stop_event, tracker, config_data):
     import mediapipe as mp
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=2,
+        max_num_hands=1,
         min_detection_confidence=0.7,
         min_tracking_confidence=0.5
     )
@@ -229,201 +185,248 @@ def main():
     )
     mp_drawing = mp.solutions.drawing_utils
     
-    # YOLO Model Yükleme
+    # YOLO Yukle
     yolo_model = None
-    if yolo_available:
-        model_path = config_data.get("model_path", "yolov8n.pt")
-        print(f"YOLO Modeli yükleniyor: {model_path}")
+    yolo_skip = config_data.get("yolo_skip_frames", 15)
+    yolo_path = config_data.get("yolo_model_path", "yolov8n.pt")
+    if yolo_available and os.path.exists(yolo_path):
         try:
-            yolo_model = YOLO(model_path)
+            yolo_model = YOLO(yolo_path)
+            print(f"[YOLO] KKD modeli yuklendi: {yolo_path}")
         except Exception as e:
-            print(f"YOLO yüklenemedi, fallback modele geçiliyor: {e}")
-            try:
-                yolo_model = YOLO("yolov8n.pt")
-            except Exception:
-                yolo_model = None
-                
-    # Kamera / Video Akışı
-    stream = VideoStream(video_path).start()
-    time.sleep(1.0) # Akışın başlaması için bekle
+            print(f"[UYARI] YOLO yuklenirken hata olustu: {e}")
+            
+    frame_count = 0
+    ppe_required = config_data.get("ppe", {"helmet": True, "vest": True, "glove": True})
+    isg_status = {k: True for k in ppe_required.keys()}
     
-    # İSG Durum Değişkenleri
-    isg_status = {"Kask": True, "Yelek": True, "Eldiven": True}
+    yolo_boxes = []
     
-    # FPS Hesaplama Değişkenleri
-    prev_time = time.time()
-    fps = 0.0
-    frame_counter = 0
-    elbow_angle = None
-    cached_pose_results = None
-    
-    cv2.namedWindow("MOST & ISG Entegre Analiz Paneli", cv2.WINDOW_NORMAL)
-    
-    print("\n--- ANALİZ BAŞLATILDI ---")
-    print("'q' tuşuna basarak analizi bitirebilir ve Excel raporunu alabilirsiniz.\n")
-    
-    while not stream.stopped:
-        frame = stream.read()
-        if frame is None:
+    while not stop_event.is_set():
+        try:
+            frame = frame_queue.get(timeout=0.1)
+        except queue.Empty:
             continue
             
         h, w = frame.shape[:2]
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_counter += 1
+        frame_count += 1
         
-        # 1. MediaPipe El ve İskelet (Pose) Takibi
+        # 1. MediaPipe El Tesbiti
         hand_results = hands.process(frame_rgb)
         
-        # Pose modelini 2 karede bir çalıştırarak CPU yükünü hafifletiyoruz (Frame Skip)
-        if frame_counter % 2 == 0:
-            cached_pose_results = pose.process(frame_rgb)
-        
+        # 2. MediaPipe Pose (2 frame'de bir)
+        pose_results = None
+        if frame_count % 2 == 0:
+            pose_results = pose.process(frame_rgb)
+            
+        # MOST Tracker Guncellemesi
         hand_detected = False
-        active_hand_label = "Right"
-        
         if hand_results.multi_hand_landmarks:
-            for idx, hand_landmarks in enumerate(hand_results.multi_hand_landmarks):
-                # El etiketini al (Sol veya Sağ)
-                hand_label = hand_results.multi_handedness[idx].classification[0].label
-                active_hand_label = hand_label
+            hand_landmarks = hand_results.multi_hand_landmarks[0]
+            # Liste formatina cevir
+            lm_list = []
+            for lm in hand_landmarks.landmark:
+                lm_list.append({'x': lm.x, 'y': lm.y})
                 
-                # Eklem koordinatlarını piksel değerine dönüştür
-                pixel_landmarks = []
-                for lm in hand_landmarks.landmark:
-                    pixel_landmarks.append({
-                        'x': int(lm.x * w),
-                        'y': int(lm.y * h)
-                    })
-                    
-                # Durum makinesine besle
-                fsm.process_frame(pixel_landmarks, hand_label, time.time())
-                hand_detected = True
-                
-                # Arayüze el eklemlerini çiz
-                mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-                
-        # Aktif elin kol eklem açılarını hesapla ve çiz
+            tracker.update(lm_list, (h, w))
+            hand_detected = True
+            
+            # El eklemlerini frame uzerine ciz
+            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+            
+        # Iskelet (Pose) ve Dirsek Acisi Cizimleri
         elbow_angle = None
-        if hand_detected and cached_pose_results and cached_pose_results.pose_landmarks:
-            lm_pose = cached_pose_results.pose_landmarks.landmark
-            is_left_hand = (active_hand_label == "Left")
+        pose_pts = []
+        if hand_detected and pose_results and pose_results.pose_landmarks:
+            lm_pose = pose_results.pose_landmarks.landmark
             try:
-                if is_left_hand:
-                    # Sol Kol: Omuz(11), Dirsek(13), Bilek(15)
-                    sh = [lm_pose[11].x, lm_pose[11].y]
-                    el = [lm_pose[13].x, lm_pose[13].y]
-                    wr = [lm_pose[15].x, lm_pose[15].y]
-                else:
-                    # Sağ Kol: Omuz(12), Dirsek(14), Bilek(16)
-                    sh = [lm_pose[12].x, lm_pose[12].y]
-                    el = [lm_pose[14].x, lm_pose[14].y]
-                    wr = [lm_pose[16].x, lm_pose[16].y]
-                
-                # Açıyı derece olarak hesapla
+                # Sag kol eklemleri: Omuz(12), Dirsek(14), Bilek(16)
+                sh = [lm_pose[12].x, lm_pose[12].y]
+                el = [lm_pose[14].x, lm_pose[14].y]
+                wr = [lm_pose[16].x, lm_pose[16].y]
                 elbow_angle = calculate_angle(sh, el, wr)
                 
-                # İskelet çizgilerini çiz (Kalın turkuaz çizgi + kırmızı eklem yuvarlakları)
-                pts = [
+                pose_pts = [
                     (int(sh[0] * w), int(sh[1] * h)),
                     (int(el[0] * w), int(el[1] * h)),
                     (int(wr[0] * w), int(wr[1] * h))
                 ]
-                cv2.line(frame, pts[0], pts[1], (255, 255, 0), 4, cv2.LINE_AA)
-                cv2.line(frame, pts[1], pts[2], (255, 255, 0), 4, cv2.LINE_AA)
-                for pt in pts:
-                    cv2.circle(frame, pt, 6, (0, 0, 255), -1)
             except Exception:
                 pass
                 
-        # 2. YOLO İSG Denetimi (Kare Atlama - 15 Karede bir çalışır)
-        if frame_counter % 15 == 0:
-            if yolo_model is not None:
-                # YOLO Çıkarımı
-                yolo_results = yolo_model(frame, verbose=False)
+        # 3. YOLO ISG Denetimi
+        if yolo_model is not None and frame_count % yolo_skip == 0:
+            yolo_results = yolo_model(frame, verbose=False)
+            yolo_boxes.clear()
+            
+            helmet_found = False
+            vest_found = False
+            glove_found = False
+            
+            names = yolo_model.names
+            for r in yolo_results:
+                for box in r.boxes:
+                    cls_id = int(box.cls[0])
+                    cls_name = names[cls_id].lower()
+                    conf = float(box.conf[0])
+                    xyxy = box.xyxy[0].cpu().numpy().tolist()
+                    yolo_boxes.append((xyxy, cls_name, conf))
+                    
+                    if "helmet" in cls_name or "kask" in cls_name:
+                        helmet_found = True
+                    if "vest" in cls_name or "yelek" in cls_name:
+                        vest_found = True
+                    if "glove" in cls_name or "eldiven" in cls_name:
+                        glove_found = True
+                        
+            # ISG durumunu guncelle
+            if "helmet" in ppe_required:
+                isg_status["helmet"] = helmet_found
+            if "vest" in ppe_required:
+                isg_status["vest"] = vest_found
+            if "glove" in ppe_required:
+                isg_status["glove"] = glove_found or hand_detected
+        elif yolo_model is None:
+            # Simule et
+            for k in isg_status.keys():
+                isg_status[k] = True
+            if "glove" in isg_status:
+                isg_status["glove"] = hand_detected
                 
-                # İSG Kuralları (COCO 'person' fallback veya custom model)
-                helmet_found = False
-                vest_found = False
-                gloves_found = False
-                
-                names = yolo_model.names
-                for r in yolo_results:
-                    for box in r.boxes:
-                        cls_name = names[int(box.cls[0])].lower()
-                        if "helmet" in cls_name or "kask" in cls_name:
-                            helmet_found = True
-                        if "vest" in cls_name or "yelek" in cls_name:
-                            vest_found = True
-                        if "glove" in cls_name or "eldiven" in cls_name:
-                            gloves_found = True
-                            
-                if "person" in names.values() and not any(k in names.values() for k in ["helmet", "kask", "vest", "yelek"]):
-                    person_found = any(names[int(box.cls[0])].lower() == "person" for r in yolo_results for box in r.boxes)
-                    if person_found:
-                        isg_status["Kask"] = True
-                        isg_status["Yelek"] = True
-                        isg_status["Eldiven"] = hand_detected
-                    else:
-                        isg_status["Kask"] = False
-                        isg_status["Yelek"] = False
-                        isg_status["Eldiven"] = False
-                else:
-                    isg_status["Kask"] = helmet_found
-                    isg_status["Yelek"] = vest_found
-                    isg_status["Eldiven"] = gloves_found
-            else:
-                isg_status["Kask"] = True
-                isg_status["Yelek"] = True
-                isg_status["Eldiven"] = hand_detected
-                
-        # 3. İSG Durumunu FSM'ye Bildir (Çevrim ihlal takibi için)
-        fsm.check_isg_violation(all(isg_status.values()))
+        # Sonuclari GUI thread'e gonder
+        res = {
+            "frame": frame,
+            "pose_pts": pose_pts,
+            "elbow_angle": elbow_angle,
+            "isg_status": isg_status,
+            "yolo_boxes": yolo_boxes,
+            "metrics": tracker.get_metrics(),
+            "recipe_step": tracker.recipe[tracker.current_recipe_idx] if tracker.current_recipe_idx < len(tracker.recipe) else "Assembly Area"
+        }
         
-        # 4. FPS ve HUD Çizimi
+        if results_queue.full():
+            try:
+                results_queue.get_nowait()
+            except queue.Empty:
+                pass
+        results_queue.put(res)
+
+def main():
+    parser = argparse.ArgumentParser(description="MOST & ISG Entegre Analiz Pipeline")
+    parser.add_argument("--source", type=str, default=None, help="Video source (dosya yolu veya kamera indexi)")
+    args = parser.parse_args()
+    
+    # Yapilandirmayi oku
+    config_path = "workspace_config.json"
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+    else:
+        print("[HATA] Yapilandirma dosyasi bulunamadi: workspace_config.json")
+        sys.exit(1)
+        
+    video_source = args.source
+    if video_source is None:
+        video_source = config_data.get("video_path", 0)
+        
+    # Sayi ise int'e cevir
+    try:
+        video_source = int(video_source)
+    except ValueError:
+        pass
+        
+    # MOSTTracker baslat
+    tracker = MOSTTracker(config_path)
+    
+    frame_queue = queue.Queue(maxsize=2)
+    results_queue = queue.Queue(maxsize=2)
+    stop_event = threading.Event()
+    
+    # Thread'leri olustur
+    t1 = threading.Thread(target=video_reader, args=(video_source, frame_queue, stop_event), daemon=True)
+    t2 = threading.Thread(target=ai_inference, args=(frame_queue, results_queue, stop_event, tracker, config_data), daemon=True)
+    
+    t1.start()
+    t2.start()
+    
+    prev_time = time.time()
+    fps = 0.0
+    
+    cv2.namedWindow("MOST & ISG Entegre Analiz Paneli", cv2.WINDOW_NORMAL)
+    
+    print("\n--- CANLI ANALIZ HATLARI BASLATILDI ---")
+    print("'q' veya ESC tusuna basarak cikis yapabilir ve raporlarinizi alabilirsiniz.\n")
+    
+    while not stop_event.is_set():
+        try:
+            res = results_queue.get(timeout=0.1)
+        except queue.Empty:
+            continue
+            
+        frame = res["frame"]
+        h, w = frame.shape[:2]
+        
+        # FPS Hesabi
         now = time.time()
         fps = 0.9 * fps + 0.1 * (1.0 / max(now - prev_time, 1e-6))
         prev_time = now
         
-        # Poligonları çiz
-        active_target_name = recipe[fsm.current_recipe_idx] if fsm.current_recipe_idx < len(recipe) else ""
-        draw_roi_polygons(frame, rois, active_target_name)
+        # 1. Pose cizimleri
+        if res["pose_pts"]:
+            pts = res["pose_pts"]
+            cv2.line(frame, pts[0], pts[1], (255, 255, 0), 4, cv2.LINE_AA)
+            cv2.line(frame, pts[1], pts[2], (255, 255, 0), 4, cv2.LINE_AA)
+            for pt in pts:
+                cv2.circle(frame, pt, 6, (0, 0, 255), -1)
+                
+        # 2. YOLO Bounding Box cizimleri
+        for box, cls_name, conf in res["yolo_boxes"]:
+            x1, y1, x2, y2 = [int(v) for v in box]
+            if cls_name in ["helmet", "kask", "vest", "yelek", "glove", "eldiven"]:
+                color = (0, 255, 0)
+            else:
+                color = (255, 255, 0)
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+            
+        # 3. Istasyon poligonlarini ciz
+        draw_station_polygons(frame, tracker.stations, res["recipe_step"])
         
-        # HUD ve Uyarıları çiz (Dirsek açısını buraya besliyoruz)
-        draw_hud(frame, fsm, isg_status, fps, elbow_angle)
+        # 4. HUD Cizimi
+        draw_hud(frame, res["metrics"], res["isg_status"], fps, res["recipe_step"], tracker)
         
-        # Görüntüyü göster
+        # 5. Sira Hatasi Kirmizi Banner
+        if res["metrics"]["sequence_error"]:
+            banner_w = 420
+            banner_h = 35
+            bx1 = (w - banner_w) // 2
+            bx2 = bx1 + banner_w
+            by1 = 10
+            by2 = by1 + banner_h
+            
+            # Kirmizi banner
+            cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 0, 255), -1)
+            cv2.rectangle(frame, (bx1, by1), (bx2, by2), (255, 255, 255), 2)
+            err_msg = f"SIRA HATASI! Beklenen: {res['recipe_step']}"
+            cv2.putText(frame, err_msg, (bx1 + 15, by1 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+            
         cv2.imshow("MOST & ISG Entegre Analiz Paneli", frame)
         
         key = cv2.waitKey(1) & 0xFF
         if key == ord('q') or key == 27:
+            print("[INFO] Kapatma istegi alindi.")
+            stop_event.set()
             break
             
-    # Kaynakları serbest bırak ve raporu yazdır
-    stream.stop()
+    # Kaynaklari serbest birak ve bitir
+    stop_event.set()
     cv2.destroyAllWindows()
     
-    # 5. Raporlama (Excel & CSV)
-    if fsm.reported_cycles:
-        df = pd.DataFrame(fsm.reported_cycles)
-        
-        # Excel kaydetme (openpyxl yoksa csv fallback)
-        try:
-            df.to_excel(EXPORT_EXCEL, index=False)
-            print(f"\n[RAPOR] Analiz tamamlandı. Excel raporu kaydedildi: '{EXPORT_EXCEL}'")
-        except Exception as e:
-            print(f"\n[UYARI] Excel kaydedilemedi (openpyxl eksik olabilir): {e}")
-            
-        try:
-            df.to_csv(EXPORT_CSV, index=False, encoding='utf-8-sig')
-            print(f"[RAPOR] CSV raporu kaydedildi: '{EXPORT_CSV}'")
-        except Exception as e:
-            print(f"[HATA] CSV kaydedilemedi: {e}")
-            
-        # Rapor özetini ekrana bas
-        print("\n=== ANALİZ ÖZET TABLOSU ===")
-        print(df.to_string(index=False))
-    else:
-        print("\n[UYARI] Analiz bitirildi fakat kaydedilmiş iş çevrimi bulunamadı.")
+    # Raporlama
+    tracker.save_report("rapor.csv")
+    export_to_excel(tracker.reported_cycles, "rapor.xlsx")
+    print("\n--- ANALIZ SONLANDIRILDI ---")
 
 if __name__ == "__main__":
     main()
