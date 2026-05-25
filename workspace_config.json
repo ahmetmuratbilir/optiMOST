@@ -1,5 +1,28 @@
 {
-  "rois": {},
-  "assembly_recipe": [],
-  "video_path": "C:/Users/asus/Downloads/is_etudu.mov"
+  "rois": {
+    "box1": [
+      [20, 20],
+      [200, 20],
+      [200, 200],
+      [20, 200]
+    ],
+    "box2": [
+      [440, 20],
+      [620, 20],
+      [620, 200],
+      [440, 200]
+    ],
+    "Home Area": [
+      [200, 260],
+      [440, 260],
+      [440, 460],
+      [200, 460]
+    ]
+  },
+  "assembly_recipe": [
+    "box1",
+    "box2",
+    "Home Area"
+  ],
+  "video_path": 0
 }
