@@ -28,12 +28,12 @@ def calculate_angle(a, b, c):
         angle = 360.0 - angle
     return angle
 
-def draw_hud(frame, metrics, isg_status, fps, recipe_step, tracker):
+def draw_hud(frame, metrics, isg_status, fps, recipe_step, tracker, left_elbow_angle=None, right_elbow_angle=None):
     h, w = frame.shape[:2]
     
-    # 1. Sol Ust Konum ve Boyutlar (Genislik: 190, Yukseklik: 235)
+    # 1. Sol Ust Konum ve Boyutlar (Genislik: 190, Yukseklik: 195)
     x1, y1 = 10, 10
-    x2, y2 = 200, 245
+    x2, y2 = 200, 195
     
     # Seffaf Arka Plan Paneli
     overlay = frame.copy()
@@ -82,7 +82,7 @@ def draw_hud(frame, metrics, isg_status, fps, recipe_step, tracker):
     # 5. Sure + TMU
     cv2.putText(frame, f"Sure: {metrics['cycle_time_sec']:.1f}s ({metrics['tmu']:.1f} TMU)", (18, 104), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Bolucu cizgi
+    # Bolucu cizgi 1
     cv2.line(frame, (15, 114), (195, 114), (80, 80, 80), 1)
     
     # 6. KKD Badgeleri
@@ -95,6 +95,34 @@ def draw_hud(frame, metrics, isg_status, fps, recipe_step, tracker):
     cv2.putText(frame, "Kask", (18, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, k_color, 1, cv2.LINE_AA)
     cv2.putText(frame, "Yelek", (70, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, v_color, 1, cv2.LINE_AA)
     cv2.putText(frame, "Eldiven", (125, 143), cv2.FONT_HERSHEY_SIMPLEX, 0.33, e_color, 1, cv2.LINE_AA)
+    
+    # Bolucu cizgi 2
+    cv2.line(frame, (15, 153), (195, 153), (80, 80, 80), 1)
+    
+    # 7. Çift Kol Ergonomi Değerleri (Sol ve Sag Aci)
+    cv2.putText(frame, "ERGONOMI", (18, 166), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 150, 0), 1, cv2.LINE_AA)
+    
+    cv2.putText(frame, "Sol: ", (18, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (255, 255, 255), 1, cv2.LINE_AA)
+    x_offset = 18 + cv2.getTextSize("Sol: ", cv2.FONT_HERSHEY_SIMPLEX, 0.33, 1)[0][0]
+    
+    if left_elbow_angle is not None:
+        l_ang_str = f"{int(left_elbow_angle)}"
+        l_color = (0, 0, 255) if left_elbow_angle > 150 else ((0, 255, 255) if left_elbow_angle > 120 else (0, 255, 0))
+        cv2.putText(frame, l_ang_str, (x_offset, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, l_color, 1, cv2.LINE_AA)
+        x_offset += cv2.getTextSize(l_ang_str, cv2.FONT_HERSHEY_SIMPLEX, 0.33, 1)[0][0]
+    else:
+        cv2.putText(frame, "--", (x_offset, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (150, 150, 150), 1, cv2.LINE_AA)
+        x_offset += cv2.getTextSize("--", cv2.FONT_HERSHEY_SIMPLEX, 0.33, 1)[0][0]
+        
+    cv2.putText(frame, " | Sag: ", (x_offset, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (255, 255, 255), 1, cv2.LINE_AA)
+    x_offset += cv2.getTextSize(" | Sag: ", cv2.FONT_HERSHEY_SIMPLEX, 0.33, 1)[0][0]
+    
+    if right_elbow_angle is not None:
+        r_ang_str = f"{int(right_elbow_angle)}"
+        r_color = (0, 0, 255) if right_elbow_angle > 150 else ((0, 255, 255) if right_elbow_angle > 120 else (0, 255, 0))
+        cv2.putText(frame, r_ang_str, (x_offset, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, r_color, 1, cv2.LINE_AA)
+    else:
+        cv2.putText(frame, "--", (x_offset, 180), cv2.FONT_HERSHEY_SIMPLEX, 0.33, (150, 150, 150), 1, cv2.LINE_AA)
 
 def draw_station_polygons(frame, stations, active_target_name):
     """Sistemdeki tum bolgeleri farkli renklerde cizer."""
@@ -173,7 +201,7 @@ def ai_inference(frame_queue, results_queue, stop_event, tracker, config_data):
     mp_hands = mp.solutions.hands
     hands = mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=1,
+        max_num_hands=2,
         min_detection_confidence=0.7,
         min_tracking_confidence=0.5
     )
@@ -220,37 +248,80 @@ def ai_inference(frame_queue, results_queue, stop_event, tracker, config_data):
         if frame_count % 2 == 0:
             pose_results = pose.process(frame_rgb)
             
-        # MOST Tracker Guncellemesi
+        # Akilli El Secimi ve MOST Tracker Guncellemesi
         hand_detected = False
+        active_hand_idx = 0
+        
         if hand_results.multi_hand_landmarks:
-            hand_landmarks = hand_results.multi_hand_landmarks[0]
-            # Liste formatina cevir
+            # Birden fazla el varsa, aktif kutuya en yakin olani sec
+            if len(hand_results.multi_hand_landmarks) > 1:
+                min_dist = 999999.0
+                target_station_name = tracker.recipe[tracker.current_recipe_idx] if tracker.current_recipe_idx < len(tracker.recipe) else "Assembly Area"
+                target_poly = tracker.stations.get(target_station_name, [])
+                
+                if len(target_poly) >= 3:
+                    target_center = np.mean(target_poly, axis=0)
+                else:
+                    target_center = np.array([w / 2, h / 2])
+                    
+                for idx, hand_lm in enumerate(hand_results.multi_hand_landmarks):
+                    # Isaret parmagi ucu (8)
+                    itip = np.array([hand_lm.landmark[8].x * w, hand_lm.landmark[8].y * h])
+                    if point_in_polygon(itip, target_poly):
+                        active_hand_idx = idx
+                        break
+                    dist = np.linalg.norm(itip - target_center)
+                    if dist < min_dist:
+                        min_dist = dist
+                        active_hand_idx = idx
+                        
+            active_hand = hand_results.multi_hand_landmarks[active_hand_idx]
+            
+            # FSM koordinat listesine cevir
             lm_list = []
-            for lm in hand_landmarks.landmark:
+            for lm in active_hand.landmark:
                 lm_list.append({'x': lm.x, 'y': lm.y})
                 
             tracker.update(lm_list, (h, w))
             hand_detected = True
             
-            # El eklemlerini frame uzerine ciz
-            mp_drawing.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
-            
-        # Iskelet (Pose) ve Dirsek Acisi Cizimleri
-        elbow_angle = None
-        pose_pts = []
-        if hand_detected and pose_results and pose_results.pose_landmarks:
-            lm_pose = pose_results.pose_landmarks.landmark
-            try:
-                # Sag kol eklemleri: Omuz(12), Dirsek(14), Bilek(16)
-                sh = [lm_pose[12].x, lm_pose[12].y]
-                el = [lm_pose[14].x, lm_pose[14].y]
-                wr = [lm_pose[16].x, lm_pose[16].y]
-                elbow_angle = calculate_angle(sh, el, wr)
+            # Tespit edilen tum elleri ekrana ciz
+            for hand_lm in hand_results.multi_hand_landmarks:
+                mp_drawing.draw_landmarks(frame, hand_lm, mp_hands.HAND_CONNECTIONS)
                 
-                pose_pts = [
-                    (int(sh[0] * w), int(sh[1] * h)),
-                    (int(el[0] * w), int(el[1] * h)),
-                    (int(wr[0] * w), int(wr[1] * h))
+        # Iskelet (Pose) ve Cift Dirsek Acisi Cizimleri
+        left_elbow_angle = None
+        right_elbow_angle = None
+        pose_pts_left = []
+        pose_pts_right = []
+        
+        if pose_results and pose_results.pose_landmarks:
+            lm_pose = pose_results.pose_landmarks.landmark
+            
+            # Sol kol eklemleri: Omuz(11), Dirsek(13), Bilek(15)
+            try:
+                sh_l = [lm_pose[11].x, lm_pose[11].y]
+                el_l = [lm_pose[13].x, lm_pose[13].y]
+                wr_l = [lm_pose[15].x, lm_pose[15].y]
+                left_elbow_angle = calculate_angle(sh_l, el_l, wr_l)
+                pose_pts_left = [
+                    (int(sh_l[0] * w), int(sh_l[1] * h)),
+                    (int(el_l[0] * w), int(el_l[1] * h)),
+                    (int(wr_l[0] * w), int(wr_l[1] * h))
+                ]
+            except Exception:
+                pass
+                
+            # Sag kol eklemleri: Omuz(12), Dirsek(14), Bilek(16)
+            try:
+                sh_r = [lm_pose[12].x, lm_pose[12].y]
+                el_r = [lm_pose[14].x, lm_pose[14].y]
+                wr_r = [lm_pose[16].x, lm_pose[16].y]
+                right_elbow_angle = calculate_angle(sh_r, el_r, wr_r)
+                pose_pts_right = [
+                    (int(sh_r[0] * w), int(sh_r[1] * h)),
+                    (int(el_r[0] * w), int(el_r[1] * h)),
+                    (int(wr_r[0] * w), int(wr_r[1] * h))
                 ]
             except Exception:
                 pass
@@ -297,8 +368,10 @@ def ai_inference(frame_queue, results_queue, stop_event, tracker, config_data):
         # Sonuclari GUI thread'e gonder
         res = {
             "frame": frame,
-            "pose_pts": pose_pts,
-            "elbow_angle": elbow_angle,
+            "pose_pts_left": pose_pts_left,
+            "pose_pts_right": pose_pts_right,
+            "left_elbow_angle": left_elbow_angle,
+            "right_elbow_angle": right_elbow_angle,
             "isg_status": isg_status,
             "yolo_boxes": yolo_boxes,
             "metrics": tracker.get_metrics(),
@@ -373,12 +446,19 @@ def main():
         prev_time = now
         
         # 1. Pose cizimleri
-        if res["pose_pts"]:
-            pts = res["pose_pts"]
-            cv2.line(frame, pts[0], pts[1], (255, 255, 0), 4, cv2.LINE_AA)
-            cv2.line(frame, pts[1], pts[2], (255, 255, 0), 4, cv2.LINE_AA)
+        if res["pose_pts_left"]:
+            pts = res["pose_pts_left"]
+            cv2.line(frame, pts[0], pts[1], (0, 255, 255), 3, cv2.LINE_AA) # Sol kol sari
+            cv2.line(frame, pts[1], pts[2], (0, 255, 255), 3, cv2.LINE_AA)
             for pt in pts:
-                cv2.circle(frame, pt, 6, (0, 0, 255), -1)
+                cv2.circle(frame, pt, 5, (0, 0, 255), -1)
+                
+        if res["pose_pts_right"]:
+            pts = res["pose_pts_right"]
+            cv2.line(frame, pts[0], pts[1], (255, 255, 0), 3, cv2.LINE_AA) # Sag kol camgobegi
+            cv2.line(frame, pts[1], pts[2], (255, 255, 0), 3, cv2.LINE_AA)
+            for pt in pts:
+                cv2.circle(frame, pt, 5, (0, 0, 255), -1)
                 
         # 2. YOLO Bounding Box cizimleri
         for box, cls_name, conf in res["yolo_boxes"]:
@@ -394,7 +474,7 @@ def main():
         draw_station_polygons(frame, tracker.stations, res["recipe_step"])
         
         # 4. HUD Cizimi
-        draw_hud(frame, res["metrics"], res["isg_status"], fps, res["recipe_step"], tracker)
+        draw_hud(frame, res["metrics"], res["isg_status"], fps, res["recipe_step"], tracker, res["left_elbow_angle"], res["right_elbow_angle"])
         
         # 5. Alt Ortadaki Rehberlik / Uyarı Paneli
         guidance_text = res["metrics"]["guidance"]
