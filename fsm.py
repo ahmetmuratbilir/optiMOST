@@ -101,7 +101,7 @@ class MOSTStateMachine:
         hand_label: "Left" veya "Right"
         """
         if not self.recipe:
-            self.active_warning = "Reçete tanımlanmamış!"
+            self.active_warning = "Recete tanimlanmamis!"
             return
             
         # 1. Koordinatları Çıkar ve Filtrele
@@ -142,28 +142,28 @@ class MOSTStateMachine:
                 if point_in_polygon(hand_pos, roi_poly):
                     in_wrong_box = True
                     self.sequence_error = True
-                    self.active_warning = f"Sıra Hatası! Hedef: {target_roi_name}, Girilen: {roi_name}"
+                    self.active_warning = f"Sira Hatasi! Hedef: {target_roi_name}, Girilen: {roi_name}"
                     
         # 3. Durum Makinesi (FSM) Geçişleri
         duration = current_time - self.state_start_time
         
         if self.state == "IDLE":
             if home_roi:
-                self.active_warning = "Başlamak için elleri dinlenme alanından (Home Area) kaldırın."
+                self.active_warning = "Baslamak icin elleri dinlenme alanindan (Home Area) kaldirin."
                 # El Home Area dışına çıktığında REACH başlar
                 if not point_in_polygon(hand_pos, home_roi):
                     self.state = "REACH"
                     self.state_start_time = current_time
                     self.sequence_error = False
-                    self.active_warning = f"{target_roi_name} kutusuna uzanılıyor."
+                    self.active_warning = f"{target_roi_name} kutusuna uzaniliyor."
             else:
-                self.active_warning = "Başlamak için Kutuya uzanın."
+                self.active_warning = "Baslamak icin Kutuya uzanin."
                 # El montaj alanından çıkıp hedef kutuya doğru hareket ettiğinde REACH başlar
                 if not point_in_polygon(hand_pos, assembly_roi):
                     self.state = "REACH"
                     self.state_start_time = current_time
                     self.sequence_error = False
-                    self.active_warning = f"{target_roi_name} kutusuna uzanılıyor."
+                    self.active_warning = f"{target_roi_name} kutusuna uzaniliyor."
                 
         elif self.state == "REACH":
             # Hedef kutuya ulaşıldığında GRASP başlar
@@ -184,7 +184,7 @@ class MOSTStateMachine:
                         self.current_cycle_steps["Grasp"] += duration
                         self.state = "MOVE"
                         self.state_start_time = current_time
-                        self.active_warning = f"Parça alındı. {assembly_roi_name} alanına taşınıyor."
+                        self.active_warning = f"Parca alindi. {assembly_roi_name} alanina tasiniyor."
                 else:
                     self.grasp_confirm_counter = max(0, self.grasp_confirm_counter - 1)
             else:
@@ -200,7 +200,7 @@ class MOSTStateMachine:
                 self.state = "PLACE"
                 self.state_start_time = current_time
                 self.place_confirm_counter = 0
-                self.active_warning = "Montaj alanına yerleştiriliyor."
+                self.active_warning = "Montaj alanina yerlestiriliyor."
                 
         elif self.state == "PLACE":
             # Parmaklar açıldığında VEYA el montaj alanını terk ettiğinde bırakma tamamlanır
@@ -223,7 +223,7 @@ class MOSTStateMachine:
                         # Home Area tanımlı ise RETURNING_HOME fazına geç
                         self.state = "RETURNING_HOME"
                         self.state_start_time = current_time
-                        self.active_warning = "Montaj tamamlandı. Elleri dinlenme alanına (Home Area) götürün."
+                        self.active_warning = "Montaj tamamlandi. Elleri dinlenme alanina (Home Area) goturun."
                     else:
                         # Home Area yoksa direkt çevrimi kaydet ve bitir
                         self.save_completed_cycle()

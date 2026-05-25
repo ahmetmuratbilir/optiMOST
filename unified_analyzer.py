@@ -103,7 +103,7 @@ def draw_hud(frame, fsm, isg_status, fps):
     
     cv2.putText(frame, f"Uzanma: {tmu_reach} TMU", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
     cv2.putText(frame, f"Kavrama: {tmu_grasp} TMU", (20, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Tasıma: {tmu_move} TMU", (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Tasima: {tmu_move} TMU", (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
     cv2.putText(frame, f"Yerlestirme: {tmu_place} TMU", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
     
     # Toplam TMU ve FPS

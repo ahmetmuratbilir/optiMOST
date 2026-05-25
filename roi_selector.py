@@ -44,16 +44,35 @@ def mouse_callback(event, x, y, flags, param):
             cv2.imshow("ROI Editor", display_frame)
             cv2.waitKey(100) # Görüntüyü tazele
             
-            roi_name = input("\nLütfen bu bölgeye bir isim verin (örn: Box 1, Box 2, Assembly Area): ").strip()
+            roi_name = get_roi_name_popup()
             if roi_name:
                 rois[roi_name] = list(points)
-                print(f"Bölge kaydedildi: '{roi_name}' -> Koordinatlar: {points}")
+                print(f"Bolge kaydedildi: '{roi_name}' -> Koordinatlar: {points}")
             else:
-                print("Geçersiz isim. Bölge iptal edildi.")
+                print("Gecersiz isim. Bolge iptal edildi.")
             points = []
             update_display()
         else:
-            print("Çokgen oluşturmak için en az 3 nokta gereklidir.")
+            print("Cokgen olusturmak icin en az 3 nokta gereklidir.")
+
+def get_roi_name_popup():
+    """Tkinter ile native pop-up acarak terminal kilitlemesini ve cokmeleri onler."""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        name = simpledialog.askstring("Bolge Isimlendirme", "Lutfen bu bolgeye bir isim verin:\n(Ornek: Box 1, Box 2, Assembly Area, Home Area)")
+        root.destroy()
+        return name.strip() if name else None
+    except Exception as e:
+        print(f"Arayuz pop-up hatasi ({e}), terminalden giris bekleniyor...")
+        try:
+            return input("\nLutfen bolge ismini girin: ").strip()
+        except Exception:
+            # Stdin kapaliysa otomatik isimlendir, cokmeyi onle
+            return "Box_" + str(len(rois) + 1)
 
 def update_display():
     global display_frame, current_frame, points, rois
@@ -63,11 +82,11 @@ def update_display():
     display_frame = current_frame.copy()
     h, w = display_frame.shape[:2]
     
-    # Bilgi/Kullanım Paneli Çizimi
+    # Bilgi/Kullanım Paneli Çizimi (OpenCV Türkçe karakter destegi olmadigi icin ASCII uyumlu yazildi)
     cv2.rectangle(display_frame, (0, 0), (w, 60), (0, 0, 0), -1)
     instructions = [
-        "Sol Klik: Nokta Ekle  |  Sağ Klik: Poligonu Kapat & İsimlendir",
-        "'s': Kaydet ve Çık  |  'c': Çizimi Sıfırla  |  'q': İptal Et ve Çık"
+        "Sol Klik: Nokta Ekle  |  Sag Klik: Poligonu Kapat & Isimlendir",
+        "'s': Kaydet ve Cik  |  'c': Cizimi Sifirla  |  'q': Iptal Et ve Cik"
     ]
     cv2.putText(display_frame, instructions[0], (15, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
     cv2.putText(display_frame, instructions[1], (15, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
