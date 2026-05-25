@@ -78,49 +78,42 @@ def draw_roi_polygons(frame, rois, active_target_name):
         cv2.putText(frame, name, (cx - 20, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
 
 def draw_hud(frame, fsm, isg_status, fps):
-    """Sağ üst ve sol üst HUD panellerini çizer."""
+    """Sağ üst ve sol üst HUD panellerini daha kompakt ve şık çizer."""
     h, w = frame.shape[:2]
     
-    # 1. Sol Üst MOST İş Etüdü Paneli
-    cv2.rectangle(frame, (10, 10), (380, 230), (0, 0, 0), -1)
-    cv2.rectangle(frame, (10, 10), (380, 230), (255, 255, 255), 1)
+    # 1. Sol Üst MOST İş Etüdü Paneli (Kompakt boyut)
+    cv2.rectangle(frame, (10, 10), (250, 145), (0, 0, 0), -1)
+    cv2.rectangle(frame, (10, 10), (250, 145), (255, 255, 255), 1)
     
-    cv2.putText(frame, "MOST IS ETUDU PANELI", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Dongu: {fsm.cycle_number}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, "MOST IS ETUDU PANELI", (18, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Dongu: {fsm.cycle_number} | Durum: {fsm.state}", (18, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
     
-    # Aktif Durum ve Reçete Sırası
     recipe_step = fsm.recipe[fsm.current_recipe_idx] if fsm.current_recipe_idx < len(fsm.recipe) else "Bitti"
-    cv2.putText(frame, f"Durum: {fsm.state}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"Hedef: {recipe_step}", (20, 120), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 150, 0), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Hedef: {recipe_step}", (18, 61), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 150, 0), 1, cv2.LINE_AA)
     
-    # Süreler
     tmu = fsm.current_cycle_steps
-    tmu_reach = round(tmu["Reach"] * 27.8, 1)
-    tmu_grasp = round(tmu["Grasp"] * 27.8, 1)
-    tmu_move = round(tmu["Move"] * 27.8, 1)
-    tmu_place = round(tmu["Place"] * 27.8, 1)
-    total_tmu = round(tmu_reach + tmu_grasp + tmu_move + tmu_place, 1)
+    tmu_reach = round(tmu.get("Reach", 0.0) * 27.8, 1)
+    tmu_grasp = round(tmu.get("Grasp", 0.0) * 27.8, 1)
+    tmu_move = round(tmu.get("Move", 0.0) * 27.8, 1)
+    tmu_place = round(tmu.get("Place", 0.0) * 27.8, 1)
+    tmu_return = round(tmu.get("Return", 0.0) * 27.8, 1)
+    total_tmu = round(tmu_reach + tmu_grasp + tmu_move + tmu_place + tmu_return, 1)
     
-    cv2.putText(frame, f"Uzanma: {tmu_reach} TMU", (20, 150), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Kavrama: {tmu_grasp} TMU", (20, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Tasima: {tmu_move} TMU", (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Yerlestirme: {tmu_place} TMU", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    
-    # Toplam TMU ve FPS
-    cv2.putText(frame, f"Toplam: {total_tmu} TMU", (210, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2, cv2.LINE_AA)
-    cv2.putText(frame, f"FPS: {round(fps, 1)}", (210, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Uzan:{tmu_reach} | Kav:{tmu_grasp} | Tas:{tmu_move}", (18, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Yerl:{tmu_place} | Donus:{tmu_return}", (18, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Toplam: {total_tmu} TMU | FPS: {round(fps, 1)}", (18, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 255, 255), 1, cv2.LINE_AA)
 
-    # 2. Sağ Üst İSG (KKD) Paneli
-    cv2.rectangle(frame, (w - 290, 10), (w - 10, 160), (0, 0, 0), -1)
-    cv2.rectangle(frame, (w - 290, 10), (w - 10, 160), (255, 255, 255), 1)
-    cv2.putText(frame, "ISG KKD KONTROLU", (w - 275, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2, cv2.LINE_AA)
+    # 2. Sağ Üst İSG (KKD) Paneli (Kompakt boyut)
+    cv2.rectangle(frame, (w - 190, 10), (w - 10, 110), (0, 0, 0), -1)
+    cv2.rectangle(frame, (w - 190, 10), (w - 10, 110), (255, 255, 255), 1)
+    cv2.putText(frame, "ISG KKD KONTROLU", (w - 180, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
     
-    y_offset = 65
+    y_offset = 48
     for item, status in isg_status.items():
         text = f"{item}: {'TAMAM' if status else 'EKSIK'}"
         color = (0, 255, 0) if status else (0, 0, 255)
-        cv2.putText(frame, text, (w - 275, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2, cv2.LINE_AA)
-        y_offset += 28
+        cv2.putText(frame, text, (w - 180, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
+        y_offset += 20
 
     # 3. Alt Ortadaki Uyarı Paneli
     if fsm.active_warning or fsm.sequence_error:
