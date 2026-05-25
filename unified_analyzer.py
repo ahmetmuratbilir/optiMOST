@@ -396,20 +396,35 @@ def main():
         # 4. HUD Cizimi
         draw_hud(frame, res["metrics"], res["isg_status"], fps, res["recipe_step"], tracker)
         
-        # 5. Sira Hatasi Kirmizi Banner
-        if res["metrics"]["sequence_error"]:
-            banner_w = 420
-            banner_h = 35
-            bx1 = (w - banner_w) // 2
-            bx2 = bx1 + banner_w
-            by1 = 10
-            by2 = by1 + banner_h
+        # 5. Alt Ortadaki Rehberlik / Uyarı Paneli
+        guidance_text = res["metrics"]["guidance"]
+        if guidance_text:
+            is_err = res["metrics"]["sequence_error"]
+            bg_color = (0, 0, 180) if is_err else (15, 15, 15)
+            border_color = (0, 0, 255) if is_err else (0, 255, 255)
+            text_color = (255, 255, 255) if is_err else (255, 255, 200)
             
-            # Kirmizi banner
-            cv2.rectangle(frame, (bx1, by1), (bx2, by2), (0, 0, 255), -1)
-            cv2.rectangle(frame, (bx1, by1), (bx2, by2), (255, 255, 255), 2)
-            err_msg = f"SIRA HATASI! Beklenen: {res['recipe_step']}"
-            cv2.putText(frame, err_msg, (bx1 + 15, by1 + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+            # Yari seffaf arka plan bandi
+            by1 = h - 50
+            by2 = h - 15
+            bx1 = 10
+            bx2 = w - 10
+            
+            overlay = frame.copy()
+            cv2.rectangle(overlay, (bx1, by1), (bx2, by2), bg_color, -1)
+            alpha = 0.50
+            cv2.addWeighted(overlay, alpha, frame, 1.0 - alpha, 0, frame)
+            
+            cv2.rectangle(frame, (bx1, by1), (bx2, by2), border_color, 1)
+            
+            # Ortalanmis yazi
+            font_scale = 0.42
+            thickness = 1
+            text_size = cv2.getTextSize(guidance_text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)[0]
+            tx = bx1 + (bx2 - bx1 - text_size[0]) // 2
+            ty = by1 + (by2 - by1 + text_size[1]) // 2
+            
+            cv2.putText(frame, guidance_text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, font_scale, text_color, thickness, cv2.LINE_AA)
             
         cv2.imshow("MOST & ISG Entegre Analiz Paneli", frame)
         

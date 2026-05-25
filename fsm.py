@@ -286,6 +286,28 @@ class MOSTTracker:
         print(f"\n[DONGU TAMAMLANDI] Dongu {self.cycle_number} -> Sure: {duration_sec} sn | TMU: {total_tmu} | Sira Hatasi: {self.sequence_error}")
         self.cycle_number += 1
 
+    def get_guidance(self):
+        target_station = self.recipe[self.current_recipe_idx] if self.current_recipe_idx < len(self.recipe) else "Assembly Area"
+        if self.sequence_error:
+            return f"SIRA HATASI! Yanlis kutuya girildi. Beklenen: {target_station}"
+            
+        if self.state == "IDLE":
+            if self.stations.get("Home Area"):
+                return "HAZIR: Baslamak icin ellerinizi Home Area (Dinlenme) alanindan kaldirin."
+            else:
+                return f"HAZIR: Baslamak icin {target_station} kutusuna uzanin."
+        elif self.state == "REACH":
+            return f"UZANMA: {target_station} kutusuna dogru uzanin."
+        elif self.state == "GRASP":
+            return f"KAVRAMA: {target_station} kutusunda bekleyin ve parmaklarinizi kapatip (Pinch) kavrayin."
+        elif self.state == "MOVE":
+            return "TASIMA: Parca alindi. Montaj alanina (Assembly Area) dogru tasiyin."
+        elif self.state == "PLACE":
+            return "YERLESTIRME: Montaj alaninda parmaklarinizi acarak parcayi birakin."
+        elif self.state == "RETURNING_HOME":
+            return "DONUS: Cevrim tamamlandi. Ellerinizi Home Area (Dinlenme) alanina goturun."
+        return ""
+
     def get_metrics(self):
         # Debounce progress string
         if self.state == "GRASP":
@@ -306,7 +328,8 @@ class MOSTTracker:
             "cycle_time_sec": cycle_time,
             "tmu": tmu,
             "sequence_error": self.sequence_error,
-            "active_station": self.active_station
+            "active_station": self.active_station,
+            "guidance": self.get_guidance()
         }
 
     def save_report(self, path):
