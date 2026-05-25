@@ -78,18 +78,40 @@ def draw_roi_polygons(frame, rois, active_target_name):
         cv2.putText(frame, name, (cx - 20, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1, cv2.LINE_AA)
 
 def draw_hud(frame, fsm, isg_status, fps, elbow_angle=None):
-    """Sağ üst ve sol üst HUD panellerini daha kompakt ve şık çizer."""
+    """MOST, İSG ve Ergonomi verilerini ekranın solunda şeffaf dikey bir panelde birleştirir."""
     h, w = frame.shape[:2]
     
-    # 1. Sol Üst MOST İş Etüdü Paneli (Kompakt boyut)
-    cv2.rectangle(frame, (10, 10), (250, 160), (0, 0, 0), -1)
-    cv2.rectangle(frame, (10, 10), (250, 160), (255, 255, 255), 1)
+    # 1. Sol Üst Konum ve Boyutlar (Genişlik: 190, Yükseklik: 245)
+    x1, y1 = 10, 10
+    x2, y2 = 200, 255
     
-    cv2.putText(frame, "MOST IS ETUDU PANELI", (18, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Dongu: {fsm.cycle_number} | Durum: {fsm.state}", (18, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1, cv2.LINE_AA)
+    # Şeffaf Arka Plan Paneli
+    overlay = frame.copy()
+    cv2.rectangle(overlay, (x1, y1), (x2, y2), (10, 10, 10), -1)
+    alpha = 0.30  # %30 şeffaflık
+    cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
+    
+    # Panel İnce Çerçevesi
+    cv2.rectangle(frame, (x1, y1), (x2, y2), (180, 180, 180), 1)
+    
+    # FSM Durumuna Göre Dinamik Sol Kenar Akış Şeridi (Accent Bar)
+    state_colors = {
+        "IDLE": (120, 120, 120),       # Gri
+        "REACH": (255, 255, 0),       # Camgöbeği (Cyan)
+        "GRASP": (0, 165, 255),       # Turuncu
+        "MOVE": (255, 0, 0),          # Mavi
+        "PLACE": (0, 255, 0),         # Yeşil
+        "RETURNING_HOME": (0, 255, 255) # Sarı
+    }
+    accent_color = state_colors.get(fsm.state, (255, 255, 255))
+    cv2.rectangle(frame, (x1, y1), (x1 + 3, y2), accent_color, -1)
+    
+    # --- 1. MOST İŞ ETÜDÜ BÖLÜMÜ ---
+    cv2.putText(frame, "MOST IS ETUDU", (18, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Dongu:{fsm.cycle_number} | {fsm.state}", (18, 39), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
     
     recipe_step = fsm.recipe[fsm.current_recipe_idx] if fsm.current_recipe_idx < len(fsm.recipe) else "Bitti"
-    cv2.putText(frame, f"Hedef: {recipe_step}", (18, 61), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 150, 0), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Hedef: {recipe_step}", (18, 53), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 150, 0), 1, cv2.LINE_AA)
     
     tmu = fsm.current_cycle_steps
     tmu_reach = round(tmu.get("Reach", 0.0) * 27.8, 1)
@@ -99,10 +121,30 @@ def draw_hud(frame, fsm, isg_status, fps, elbow_angle=None):
     tmu_return = round(tmu.get("Return", 0.0) * 27.8, 1)
     total_tmu = round(tmu_reach + tmu_grasp + tmu_move + tmu_place + tmu_return, 1)
     
-    cv2.putText(frame, f"Uzan:{tmu_reach} | Kav:{tmu_grasp} | Tas:{tmu_move}", (18, 80), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(frame, f"Yerl:{tmu_place} | Donus:{tmu_return}", (18, 98), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"U:{tmu_reach} K:{tmu_grasp} T:{tmu_move}", (18, 68), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Y:{tmu_place} D:{tmu_return} TMU", (18, 81), cv2.FONT_HERSHEY_SIMPLEX, 0.32, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Toplam: {total_tmu} TMU", (18, 96), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 255, 255), 1, cv2.LINE_AA)
     
-    # Dirsek Açısı (Kol Gerginliği)
+    # Bölücü Çizgi 1
+    cv2.line(frame, (15, 104), (195, 104), (80, 80, 80), 1)
+    
+    # --- 2. İSG KONTROLÜ BÖLÜMÜ ---
+    cv2.putText(frame, "ISG KKD DURUMU", (18, 118), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (0, 0, 255), 1, cv2.LINE_AA)
+    
+    k_color = (0, 255, 0) if isg_status.get("Kask", True) else (0, 0, 255)
+    v_color = (0, 255, 0) if isg_status.get("Yelek", True) else (0, 0, 255)
+    e_color = (0, 255, 0) if isg_status.get("Eldiven", True) else (0, 0, 255)
+    
+    cv2.putText(frame, "Kask", (18, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, k_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, "Yelek", (70, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, v_color, 1, cv2.LINE_AA)
+    cv2.putText(frame, "Eldiven", (125, 133), cv2.FONT_HERSHEY_SIMPLEX, 0.33, e_color, 1, cv2.LINE_AA)
+    
+    # Bölücü Çizgi 2
+    cv2.line(frame, (15, 142), (195, 142), (80, 80, 80), 1)
+    
+    # --- 3. ERGONOMİ BÖLÜMÜ ---
+    cv2.putText(frame, "ERGONOMI", (18, 156), cv2.FONT_HERSHEY_SIMPLEX, 0.40, (255, 150, 0), 1, cv2.LINE_AA)
+    
     if elbow_angle is not None:
         if elbow_angle > 150:
             angle_color = (0, 0, 255) # Kırmızı
@@ -113,25 +155,26 @@ def draw_hud(frame, fsm, isg_status, fps, elbow_angle=None):
         else:
             angle_color = (0, 255, 0) # Yeşil
             strain_txt = "DUSUK"
-        cv2.putText(frame, f"Kol Acisi: {int(elbow_angle)} deg ({strain_txt})", (18, 116), cv2.FONT_HERSHEY_SIMPLEX, 0.36, angle_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Aci: {int(elbow_angle)} deg", (18, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.35, angle_color, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"Gerginlik: {strain_txt}", (18, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.35, angle_color, 1, cv2.LINE_AA)
     else:
-        cv2.putText(frame, "Kol Acisi: Tespit edilmedi", (18, 116), cv2.FONT_HERSHEY_SIMPLEX, 0.36, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Aci: Tespit yok", (18, 171), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1, cv2.LINE_AA)
+        cv2.putText(frame, "Gerginlik: --", (18, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (150, 150, 150), 1, cv2.LINE_AA)
         
-    cv2.putText(frame, f"Toplam: {total_tmu} TMU | FPS: {round(fps, 1)}", (18, 142), cv2.FONT_HERSHEY_SIMPLEX, 0.43, (0, 255, 255), 1, cv2.LINE_AA)
-
-    # 2. Sağ Üst İSG (KKD) Paneli (Kompakt boyut)
-    cv2.rectangle(frame, (w - 190, 10), (w - 10, 110), (0, 0, 0), -1)
-    cv2.rectangle(frame, (w - 190, 10), (w - 10, 110), (255, 255, 255), 1)
-    cv2.putText(frame, "ISG KKD KONTROLU", (w - 180, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1, cv2.LINE_AA)
+    # Bölücü Çizgi 3
+    cv2.line(frame, (15, 194), (195, 194), (80, 80, 80), 1)
     
-    y_offset = 48
-    for item, status in isg_status.items():
-        text = f"{item}: {'TAMAM' if status else 'EKSIK'}"
-        color = (0, 255, 0) if status else (0, 0, 255)
-        cv2.putText(frame, text, (w - 180, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1, cv2.LINE_AA)
-        y_offset += 20
+    # --- 4. KAVRAMA / PINCH KONTROL DETAYI ---
+    cv2.putText(frame, "KAVRAMA KONTROL", (18, 207), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (200, 200, 255), 1, cv2.LINE_AA)
+    cv2.putText(frame, f"Oran: {fsm.last_pinch_dist:.2f} / {fsm.pinch_threshold:.2f}", (18, 221), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # Bölücü Çizgi 4
+    cv2.line(frame, (15, 230), (195, 230), (80, 80, 80), 1)
+    
+    # --- 5. TAZELENME HIZI (FPS) ---
+    cv2.putText(frame, f"Sistem: {round(fps, 1)} FPS", (18, 244), cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 255, 255), 1, cv2.LINE_AA)
 
-    # 3. Alt Ortadaki Uyarı Paneli
+    # 3. Alt Ortadaki Uyarı Paneli (Aynı kalacak)
     if fsm.active_warning or fsm.sequence_error:
         warn_text = fsm.active_warning
         color = (0, 0, 255) if (fsm.sequence_error or "Hata" in warn_text) else (0, 255, 255)

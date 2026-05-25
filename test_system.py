@@ -8,7 +8,7 @@ def mock_landmark(wrist_pos, index_tip_pos, thumb_tip_pos):
     # Wrist (0)
     landmarks[0] = {'x': wrist_pos[0], 'y': wrist_pos[1]}
     # Index MCP (5)
-    landmarks[5] = {'x': wrist_pos[0], 'y': wrist_pos[1] - 1.0} # El büyüklüğü ölçeğini 1.0 yapmak için
+    landmarks[5] = {'x': wrist_pos[0], 'y': wrist_pos[1] - 50.0} # El büyüklüğü ölçeğini 50 yapmak için
     # Thumb Tip (4)
     landmarks[4] = {'x': thumb_tip_pos[0], 'y': thumb_tip_pos[1]}
     # Index Tip (8)
@@ -33,7 +33,7 @@ def run_tests():
     
     # Test 1: IDLE Durumu Doğrulaması
     # El montaj alanında (örneğin 15, 25)
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.6]) # El açık
+    lm = mock_landmark([15, 28], [15, 25], [15, 55]) # El açık (pinch_dist = 30 / 50 = 0.6)
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"Test 1 - IDLE Kontrolü: Beklenen: IDLE, Gerçek: {fsm.state}")
@@ -42,7 +42,7 @@ def run_tests():
     # Test 2: REACH Durumu Geçişi
     # El montaj alanını terk ediyor (örneğin 15, 15)
     current_time += 1.0
-    lm = mock_landmark([15, 18], [15, 15], [15, 15.6])
+    lm = mock_landmark([15, 18], [15, 15], [15, 45]) # El açık
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"Test 2 - REACH Kontrolü: Beklenen: REACH, Gerçek: {fsm.state}")
@@ -51,15 +51,15 @@ def run_tests():
     # Test 3: GRASP Durumu Geçişi
     # El Box 1 içine giriyor (örneğin 5, 5)
     current_time += 1.0
-    lm = mock_landmark([5, 8], [5, 5], [5, 5.6])
+    lm = mock_landmark([5, 8], [5, 5], [5, 35]) # El açık (kutu içinde kavrama bekleniyor)
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"Test 3 - GRASP Kontrolü: Beklenen: GRASP, Gerçek: {fsm.state}")
     assert fsm.state == "GRASP", "Test 3 başarısız!"
     
     # Test 4: MOVE Durumu Geçişi (Kavrama Doğrulaması)
-    # Parmakları kapatıp (pinch_dist < 0.28) Box 1'de bekliyoruz
-    lm = mock_landmark([5, 8], [5, 5], [5, 5.15]) # pinch_dist = 0.15 < 0.28 (kavrama)
+    # Parmakları kapatıp (pinch_dist = 5 / 50 = 0.1 < 0.28) Box 1'de bekliyoruz
+    lm = mock_landmark([5, 8], [5, 5], [5, 10])
     
     # EMA yakınsaması ve grasp_confirm_counter (3 kare) tetiklenmesi için 10 kare çalıştırıyoruz
     for i in range(10):
@@ -72,15 +72,15 @@ def run_tests():
     # Test 5: PLACE Durumu Geçişi
     # El Box 1'den montaj alanına taşıyor (örneğin 15, 25)
     current_time += 1.0
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.15]) # Hala parçayı tutuyor
+    lm = mock_landmark([15, 28], [15, 25], [15, 30]) # Hala parçayı tutuyor
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"Test 5 - PLACE Kontrolü: Beklenen: PLACE, Gerçek: {fsm.state}")
     assert fsm.state == "PLACE", "Test 5 başarısız!"
     
     # Test 6: Reçete Adımı İlerlemesi (PLACE -> REACH (Box 2))
-    # Parmakları açıp parçayı bırakıyoruz (pinch_dist > 0.40)
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.6]) # Açık el (pinch_dist = 0.6)
+    # Parmakları açıp parçayı bırakıyoruz (pinch_dist = 30 / 50 = 0.6 > 0.40)
+    lm = mock_landmark([15, 28], [15, 25], [15, 55])
     for _ in range(10):
         current_time += 0.1
         fsm.process_frame(lm, "Right", current_time)
@@ -93,13 +93,13 @@ def run_tests():
     # İkinci kutuyu (Box 2) da tamamlayalım
     # Box 2'ye ulaştı
     current_time += 1.0
-    lm = mock_landmark([25, 8], [25, 5], [25, 5.6])
+    lm = mock_landmark([25, 8], [25, 5], [25, 35]) # Açık el
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     assert fsm.state == "GRASP"
     
     # Box 2'de kavradı (pinch kapatıldı)
-    lm = mock_landmark([25, 8], [25, 5], [25, 5.15])
+    lm = mock_landmark([25, 8], [25, 5], [25, 10])
     for _ in range(10):
         current_time += 0.1
         fsm.process_frame(lm, "Right", current_time)
@@ -107,13 +107,13 @@ def run_tests():
     
     # Montaj alanına getirdi
     current_time += 1.0
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.15])
+    lm = mock_landmark([15, 28], [15, 25], [15, 30])
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     assert fsm.state == "PLACE"
     
     # Bıraktı (açık el)
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.6])
+    lm = mock_landmark([15, 28], [15, 25], [15, 55])
     for _ in range(10):
         current_time += 0.1
         fsm.process_frame(lm, "Right", current_time)
@@ -144,7 +144,7 @@ def run_home_area_tests():
     current_time = time.time()
 
     # H1: IDLE başlangıcı (El Home Area içinde, örn: 5, 35)
-    lm = mock_landmark([5, 38], [5, 35], [5, 35.6])
+    lm = mock_landmark([5, 38], [5, 35], [5, 65]) # Açık el
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"H1 - Home IDLE: Beklenen: IDLE, Gerçek: {fsm.state}")
@@ -152,7 +152,7 @@ def run_home_area_tests():
 
     # H2: REACH (El Home Area dışına çıkıyor, örn: 5, 20)
     current_time += 1.0
-    lm = mock_landmark([5, 23], [5, 20], [5, 20.6])
+    lm = mock_landmark([5, 23], [5, 20], [5, 50]) # Açık el
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"H2 - Home REACH: Beklenen: REACH, Gerçek: {fsm.state}")
@@ -160,7 +160,7 @@ def run_home_area_tests():
 
     # H3: GRASP (Box 1'e girdi ve kavradı)
     current_time += 1.0
-    lm = mock_landmark([5, 8], [5, 5], [5, 5.15])
+    lm = mock_landmark([5, 8], [5, 5], [5, 10]) # Kapalı el
     for _ in range(10):
         current_time += 0.1
         fsm.process_frame(lm, "Right", current_time)
@@ -169,7 +169,7 @@ def run_home_area_tests():
 
     # H4: PLACE (Montaj alanında bıraktı)
     current_time += 1.0
-    lm = mock_landmark([15, 28], [15, 25], [15, 25.6])
+    lm = mock_landmark([15, 28], [15, 25], [15, 55]) # Açık el
     for _ in range(10):
         current_time += 0.1
         fsm.process_frame(lm, "Right", current_time)
@@ -179,7 +179,7 @@ def run_home_area_tests():
 
     # H5: RETURNING_HOME -> IDLE (El Home Area içine döndü, örn: 5, 35)
     current_time += 1.0
-    lm = mock_landmark([5, 38], [5, 35], [5, 35.6])
+    lm = mock_landmark([5, 38], [5, 35], [5, 65]) # Açık el
     for _ in range(5):
         fsm.process_frame(lm, "Right", current_time)
     print(f"H5 - Home Dönüşü Tamamlama: Beklenen: IDLE, Gerçek: {fsm.state}")

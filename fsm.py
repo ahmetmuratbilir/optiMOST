@@ -32,6 +32,8 @@ class MOSTStateMachine:
         self.config = config_data
         self.rois = config_data.get("rois", {})
         self.recipe = config_data.get("assembly_recipe", [])
+        self.pinch_threshold = config_data.get("pinch_threshold", 0.28)
+        self.release_threshold = config_data.get("release_threshold", 0.40)
         
         # Filtreler (Sol ve Sağ el için ayrı koordinat düzleştiriciler)
         self.filters = {
@@ -77,6 +79,7 @@ class MOSTStateMachine:
         # Ekran Uyarı Mesajları
         self.sequence_error = False
         self.active_warning = ""
+        self.last_pinch_dist = 0.0
 
     def reset_cycle(self, next_cycle=True):
         self.state = "IDLE"
@@ -119,11 +122,12 @@ class MOSTStateMachine:
         
         # 2. Dinamik Parmak Açıklık Oranı (Hand Size Normalization)
         hand_size = np.linalg.norm(f_wrist - f_index_mcp)
-        pinch_dist = np.linalg.norm(f_index_tip - f_thumb_tip) / max(hand_size, 1e-6)
+        pinch_dist = np.linalg.norm(f_index_tip - f_thumb_tip) / max(hand_size, 15.0)
+        self.last_pinch_dist = pinch_dist
         
         # Pinch (Kavrama) Koşulları (Ölçeklenmiş oranlar)
-        is_pinching = pinch_dist < 0.28
-        is_releasing = pinch_dist > 0.40
+        is_pinching = pinch_dist < self.pinch_threshold
+        is_releasing = pinch_dist > self.release_threshold
         
         # El konumu olarak işaret parmağı ucunu baz alalım
         hand_pos = f_index_tip
