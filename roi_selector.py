@@ -172,19 +172,23 @@ def main():
             config["rois"] = rois
             
             # Reçete girişi
-            print("\n--- MONTAJ REÇETESİ TANIMLAMA ---")
-            print("Mevcut Bölgeler:", list(rois.keys()))
-            recipe_input = input("Montaj sırasını virgülle ayırarak yazın (örn: Box 1, Box 2, Assembly Area): ").strip()
+            print("\n--- MONTAJ RECETESI TANIMLAMA ---")
+            print("Mevcut Bolgeler:", list(rois.keys()))
             
-            recipe = [r.strip() for r in recipe_input.split(",") if r.strip() in rois]
+            recipe_input = get_recipe_popup(list(rois.keys()))
+            
+            if recipe_input:
+                recipe = [r.strip() for r in recipe_input.split(",") if r.strip() in rois]
+            else:
+                recipe = []
             
             if recipe:
                 config["assembly_recipe"] = recipe
-                print(f"Reçete kaydedildi: {recipe}")
+                print(f"Recete kaydedildi: {recipe}")
             else:
                 # Varsayılan olarak tüm bölgeleri ekle
                 config["assembly_recipe"] = list(rois.keys())
-                print(f"Geçersiz veya boş reçete. Varsayılan sıra atandı: {config['assembly_recipe']}")
+                print(f"Gecersiz veya bos recete. Varsayilan sira atandi: {config['assembly_recipe']}")
                 
             save_config(config)
             break
@@ -193,15 +197,34 @@ def main():
             # Temizleme
             points = []
             rois = {}
-            print("Tüm bölgeler temizlendi.")
+            print("Tum bolgeler temizlendi.")
             update_display()
             
         elif key == ord('q') or key == 27:
-            print("Değişiklikler kaydedilmeden çıkıldı.")
+            print("Degisiklikler kaydedilmeden cikildi.")
             break
             
     cap.release()
     cv2.destroyAllWindows()
+
+def get_recipe_popup(available_rois):
+    """Tkinter ile pop-up acarak montaj recetesi girilmesini saglar."""
+    try:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        root.attributes("-topmost", True)
+        prompt = f"Mevcut Bolgeler: {available_rois}\n\nMontaj sirasini virgul ile ayirarak yazin:\n(Ornek: Box 1, Box 2, Assembly Area)"
+        recipe_input = simpledialog.askstring("Montaj Recetesi", prompt)
+        root.destroy()
+        return recipe_input
+    except Exception as e:
+        print(f"Recete pop-up hatasi ({e}), terminalden giris bekleniyor...")
+        try:
+            return input("Montaj sirasini girin: ").strip()
+        except Exception:
+            return None
 
 if __name__ == "__main__":
     main()
